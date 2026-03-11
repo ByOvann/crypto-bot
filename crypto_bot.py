@@ -1,11 +1,11 @@
 """
 ===========================================
   Telegram Crypto Bot — BlockStation
-  Fitur: Harga BTC, Leaderboard, Berita, Kuis
+  Fitur: Harga BTC, Berita Real-time, Kuis, Leaderboard
   By: Claude | Stack: python-telegram-bot
 ===========================================
 SETUP:
-  pip install python-telegram-bot apscheduler requests
+  pip install python-telegram-bot apscheduler requests feedparser
 
 JALANKAN:
   python crypto_bot.py
@@ -13,6 +13,7 @@ JALANKAN:
 
 import logging
 import requests
+import feedparser
 import os
 import json
 from datetime import datetime, timedelta
@@ -38,7 +39,22 @@ JADWAL = [
 ]
 
 POIN_BENAR = 3
-POIN_SALAH = 5   # dikurangi
+POIN_SALAH = 5
+
+# Sumber berita RSS crypto (semua gratis)
+RSS_SOURCES = [
+    {"name": "CoinDesk",       "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"},
+    {"name": "CoinTelegraph",  "url": "https://cointelegraph.com/rss"},
+    {"name": "Decrypt",        "url": "https://decrypt.co/feed"},
+    {"name": "Bitcoin Magazine","url": "https://bitcoinmagazine.com/feed"},
+    {"name": "CryptoSlate",    "url": "https://cryptoslate.com/feed/"},
+]
+
+FILE_HARIAN      = "data_harian.json"
+FILE_MINGGUAN    = "data_mingguan.json"
+FILE_BULANAN     = "data_bulanan.json"
+FILE_KUIS        = "data_kuis.json"
+FILE_BERITA_SENT = "berita_sent.json"   # track berita yang sudah dikirim
 # ─────────────────────────────────────────
 
 logging.basicConfig(
@@ -47,10 +63,6 @@ logging.basicConfig(
 )
 
 # ──────────────── STORAGE ───────────────────
-FILE_HARIAN   = "data_harian.json"
-FILE_MINGGUAN = "data_mingguan.json"
-FILE_BULANAN  = "data_bulanan.json"
-FILE_KUIS     = "data_kuis.json"   # jawaban kuis aktif saat ini
 
 def load_data(filepath: str) -> dict:
     if os.path.exists(filepath):
@@ -82,14 +94,13 @@ def tambah_pesan(user_id: str, nama: str, username: str):
         save_data(filepath, data)
 
 def update_poin(user_id: str, nama: str, username: str, delta: int):
-    """Tambah atau kurangi poin di semua periode"""
     for filepath in [FILE_HARIAN, FILE_MINGGUAN, FILE_BULANAN]:
         data = load_data(filepath)
         if user_id not in data:
             data[user_id] = {"nama": nama, "username": username, "pesan": 0, "poin": 0}
         if "poin" not in data[user_id]:
             data[user_id]["poin"] = 0
-        data[user_id]["poin"] = max(0, data[user_id]["poin"] + delta)
+        data[user_id]["poin"]     = max(0, data[user_id]["poin"] + delta)
         data[user_id]["nama"]     = nama
         data[user_id]["username"] = username
         save_data(filepath, data)
@@ -102,10 +113,8 @@ def format_leaderboard(filepath: str, judul: str, periode: str) -> str:
 
     if not data:
         return (
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"{judul}\n📅 {periode}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Belum ada aktivitas tercatat.\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n{judul}\n📅 {periode}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\nBelum ada aktivitas tercatat.\n"
             f"━━━━━━━━━━━━━━━━━━━━"
         )
 
@@ -114,22 +123,17 @@ def format_leaderboard(filepath: str, judul: str, periode: str) -> str:
         key=lambda x: (x[1].get("poin", 0), x[1]["pesan"]),
         reverse=True
     )
-    top5  = sorted_members[:5]
-    rows  = ""
-    for i, (uid, info) in enumerate(top5):
+    rows = ""
+    for i, (uid, info) in enumerate(sorted_members[:5]):
         username = f"@{info['username']}" if info["username"] else info["nama"]
-        pesan    = info["pesan"]
-        poin     = info.get("poin", 0)
-        rows += f"{medals[i]} {username} — `{pesan} pesan` | `{poin} poin`\n"
+        rows += f"{medals[i]} {username} — `{info['pesan']} pesan` | `{info.get('poin', 0)} poin`\n"
 
     total_pesan  = sum(v["pesan"] for v in data.values())
     total_member = len(data)
 
     return (
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{judul}\n📅 {periode}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{rows}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n{judul}\n📅 {periode}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n{rows}\n"
         f"📊 Total pesan  : `{total_pesan}`\n"
         f"👥 Member aktif : `{total_member} orang`\n\n"
         f"💬 _Terus semangat berdiskusi!_ 🚀\n"
@@ -163,20 +167,71 @@ def get_fear_greed():
         logging.error(f"Error get FG: {e}")
         return None
 
-def get_crypto_news():
-    """Ambil berita crypto terbaru dari CryptoPanic API (gratis)"""
-    try:
-        r = requests.get(
-            "https://cryptopanic.com/api/v1/posts/",
-            params={"auth_token": "free", "public": "true", "kind": "news", "currencies": "BTC"},
-            timeout=10
+# ──────────────── BERITA REAL-TIME ───────────────────
+
+def fetch_rss_news(max_per_source: int = 3) -> list:
+    """Ambil berita dari semua sumber RSS"""
+    semua_berita = []
+    for src in RSS_SOURCES:
+        try:
+            feed = feedparser.parse(src["url"])
+            for entry in feed.entries[:max_per_source]:
+                semua_berita.append({
+                    "id":     entry.get("id") or entry.get("link", ""),
+                    "judul":  entry.get("title", "No title"),
+                    "url":    entry.get("link", ""),
+                    "sumber": src["name"],
+                    "waktu":  entry.get("published", "")
+                })
+        except Exception as e:
+            logging.error(f"Error RSS {src['name']}: {e}")
+    return semua_berita
+
+async def cek_dan_kirim_berita(bot: Bot):
+    """Cek berita baru setiap 5 menit, kirim kalau ada yang baru"""
+    sent = load_data(FILE_BERITA_SENT)
+    berita_list = fetch_rss_news(max_per_source=5)
+
+    berita_baru = []
+    for b in berita_list:
+        if b["id"] not in sent:
+            berita_baru.append(b)
+            sent[b["id"]] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    if not berita_baru:
+        return
+
+    # Batasi max 15 berita per batch agar tidak spam
+    berita_baru = berita_baru[:15]
+
+    # Simpan yang sudah dikirim
+    # Bersihkan data lama (simpan max 500 ID terakhir)
+    if len(sent) > 500:
+        keys = list(sent.keys())
+        for k in keys[:-500]:
+            del sent[k]
+    save_data(FILE_BERITA_SENT, sent)
+
+    # Kirim per berita (satu pesan per berita agar ada link preview)
+    now = datetime.now().strftime("%H:%M WIB")
+    for b in berita_baru:
+        msg = (
+            f"📰 *{b['sumber']}* — {now}\n\n"
+            f"*{b['judul']}*\n\n"
+            f"🔗 {b['url']}"
         )
-        r.raise_for_status()
-        results = r.json().get("results", [])[:5]  # ambil 5 berita teratas
-        return results
-    except Exception as e:
-        logging.error(f"Error get news: {e}")
-        return []
+        try:
+            await bot.send_message(
+                chat_id=GROUP_ID,
+                text=msg,
+                parse_mode="Markdown",
+                disable_web_page_preview=False
+            )
+            await asyncio.sleep(1)  # jeda 1 detik antar pesan agar tidak flood
+        except Exception as e:
+            logging.error(f"Gagal kirim berita: {e}")
+
+    logging.info(f"✅ {len(berita_baru)} berita baru terkirim")
 
 # ──────────────── FORMAT PESAN HARGA ───────────────────
 
@@ -220,131 +275,69 @@ def format_message(label_waktu: str) -> str:
         f"_Data: CoinGecko & Alternative.me_"
     )
 
-# ──────────────── BERITA CRYPTO ───────────────────
-
-def format_berita() -> str:
-    news  = get_crypto_news()
-    now   = datetime.now().strftime("%d %b %Y | %H:%M WIB")
-
-    if not news:
-        return (
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📰 *Berita Crypto Pagi Ini*\n🕐 {now}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"❌ Berita tidak tersedia saat ini.\n"
-            f"━━━━━━━━━━━━━━━━━━━━"
-        )
-
-    baris = ""
-    for i, item in enumerate(news, 1):
-        judul = item.get("title", "No title")
-        url   = item.get("url", "")
-        src   = item.get("source", {}).get("title", "Unknown")
-        baris += f"{i}. [{judul}]({url})\n   _— {src}_\n\n"
-
-    return (
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📰 *Berita Crypto Pagi Ini*\n🕐 {now}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{baris}"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"_Sumber: CryptoPanic_"
-    )
-
 # ──────────────── KUIS BTC ───────────────────
 
-def buat_opsi_range(harga: float) -> list:
-    """Buat 4 pilihan range harga, salah satunya adalah jawaban benar"""
+def buat_opsi_range(harga: float) -> tuple:
     import random
-    step   = 1000  # range per opsi $1000
-    base   = int(harga / step) * step
-    benar  = f"${base:,} – ${base + step:,}"
-
-    # Buat 3 opsi salah (range berbeda)
+    step  = 1000
+    base  = int(harga / step) * step
+    benar = f"${base:,} – ${base + step:,}"
     offsets = [-2, -1, 1, 2]
     random.shuffle(offsets)
-    salah = [f"${base + (o * step):,} – ${base + (o * step) + step:,}" for o in offsets[:3]]
-
+    salah = [f"${base + (o*step):,} – ${base + (o*step) + step:,}" for o in offsets[:3]]
     semua = [benar] + salah
     random.shuffle(semua)
     return semua, benar
 
 async def kirim_kuis(bot: Bot):
-    """Kirim kuis tebak range harga BTC jam 20:00 WIB"""
     btc = get_btc_price()
     if not btc:
         return
-
-    harga_sekarang = btc["usd"]
-    opsi, jawaban_benar = buat_opsi_range(harga_sekarang)
-
-    # Simpan jawaban benar & siapa saja yang sudah jawab
-    kuis_data = {
-        "jawaban_benar": jawaban_benar,
-        "harga_saat_kuis": harga_sekarang,
-        "sudah_jawab": {},   # {user_id: pilihan_mereka}
-        "waktu": datetime.now().strftime("%d %b %Y %H:%M")
-    }
-    save_data(FILE_KUIS, kuis_data)
-
-    # Buat tombol inline
-    keyboard = [[InlineKeyboardButton(o, callback_data=f"kuis:{o}")] for o in opsi]
+    opsi, jawaban_benar = buat_opsi_range(btc["usd"])
+    save_data(FILE_KUIS, {
+        "jawaban_benar":   jawaban_benar,
+        "harga_saat_kuis": btc["usd"],
+        "sudah_jawab":     {},
+        "waktu":           datetime.now().strftime("%d %b %Y %H:%M")
+    })
+    keyboard     = [[InlineKeyboardButton(o, callback_data=f"kuis:{o}")] for o in opsi]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     now = datetime.now().strftime("%d %b %Y | %H:%M WIB")
     msg = (
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 *Kuis Harian — Tebak Harga BTC!*\n"
-        f"🕐 {now}\n"
+        f"🎯 *Kuis Harian — Tebak Harga BTC!*\n🕐 {now}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Harga BTC sekarang: `${harga_sekarang:,.0f}`\n\n"
-        f"❓ *Menurut kamu, harga BTC 1 jam lagi akan berada di range mana?*\n\n"
+        f"Harga BTC sekarang: `${btc['usd']:,.0f}`\n\n"
+        f"❓ *Harga BTC 1 jam lagi ada di range mana?*\n\n"
         f"✅ Benar: `+{POIN_BENAR} poin`\n"
         f"❌ Salah: `-{POIN_SALAH} poin`\n\n"
         f"⏰ _Jawaban ditutup dalam 1 jam_"
     )
-
     try:
-        await bot.send_message(
-            chat_id=GROUP_ID,
-            text=msg,
-            parse_mode="Markdown",
-            reply_markup=reply_markup
-        )
+        await bot.send_message(chat_id=GROUP_ID, text=msg,
+            parse_mode="Markdown", reply_markup=reply_markup)
         logging.info("✅ Kuis terkirim")
     except Exception as e:
         logging.error(f"Gagal kirim kuis: {e}")
 
 async def tutup_kuis(bot: Bot):
-    """Tutup kuis 1 jam setelah dibuka, cek jawaban & update poin"""
     kuis = load_data(FILE_KUIS)
     if not kuis or "jawaban_benar" not in kuis:
         return
-
     jawaban_benar = kuis["jawaban_benar"]
     sudah_jawab   = kuis.get("sudah_jawab", {})
     harga_check   = get_btc_price()
     harga_aktual  = f"${harga_check['usd']:,.0f}" if harga_check else "N/A"
 
-    benar_list = []
-    salah_list = []
-
+    benar_list, salah_list = [], []
     for uid, info in sudah_jawab.items():
-        nama     = info["nama"]
-        username = info["username"]
-        pilihan  = info["pilihan"]
-
-        if pilihan == jawaban_benar:
-            update_poin(uid, nama, username, +POIN_BENAR)
-            tag = f"@{username}" if username else nama
+        tag = f"@{info['username']}" if info["username"] else info["nama"]
+        if info["pilihan"] == jawaban_benar:
+            update_poin(uid, info["nama"], info["username"], +POIN_BENAR)
             benar_list.append(tag)
         else:
-            update_poin(uid, nama, username, -POIN_SALAH)
-            tag = f"@{username}" if username else nama
+            update_poin(uid, info["nama"], info["username"], -POIN_SALAH)
             salah_list.append(tag)
-
-    benar_str = ", ".join(benar_list) if benar_list else "_Tidak ada_"
-    salah_str = ", ".join(salah_list) if salah_list else "_Tidak ada_"
 
     msg = (
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -352,12 +345,11 @@ async def tutup_kuis(bot: Bot):
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Jawaban benar: `{jawaban_benar}`\n"
         f"Harga aktual : `{harga_aktual}`\n\n"
-        f"✅ Benar (+{POIN_BENAR} poin):\n{benar_str}\n\n"
-        f"❌ Salah (-{POIN_SALAH} poin):\n{salah_str}\n\n"
+        f"✅ Benar (+{POIN_BENAR} poin):\n{', '.join(benar_list) or '_Tidak ada_'}\n\n"
+        f"❌ Salah (-{POIN_SALAH} poin):\n{', '.join(salah_list) or '_Tidak ada_'}\n\n"
         f"🏆 Cek poin kamu: ketik `top`\n"
         f"━━━━━━━━━━━━━━━━━━━━"
     )
-
     try:
         await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown")
         logging.info("✅ Hasil kuis terkirim")
@@ -365,41 +357,30 @@ async def tutup_kuis(bot: Bot):
     except Exception as e:
         logging.error(f"Gagal kirim hasil kuis: {e}")
 
-# ──────────────── CALLBACK KUIS (tombol jawaban) ───────────────────
-
 async def callback_kuis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if not query.data.startswith("kuis:"):
         return
-
-    pilihan  = query.data.replace("kuis:", "")
-    user     = query.from_user
-    user_id  = str(user.id)
-    nama     = user.first_name or ""
-    if user.last_name:
-        nama += f" {user.last_name}"
+    pilihan = query.data.replace("kuis:", "")
+    user    = query.from_user
+    user_id = str(user.id)
+    nama    = (user.first_name or "") + (f" {user.last_name}" if user.last_name else "")
     username = user.username or ""
 
     kuis = load_data(FILE_KUIS)
     if not kuis or "jawaban_benar" not in kuis:
         await query.answer("⏰ Kuis sudah ditutup!", show_alert=True)
         return
-
-    sudah_jawab = kuis.get("sudah_jawab", {})
-    if user_id in sudah_jawab:
-        await query.answer("⚠️ Kamu sudah menjawab kuis ini!", show_alert=True)
+    if user_id in kuis.get("sudah_jawab", {}):
+        await query.answer("⚠️ Kamu sudah menjawab!", show_alert=True)
         return
 
-    # Simpan jawaban
-    sudah_jawab[user_id] = {"nama": nama, "username": username, "pilihan": pilihan}
-    kuis["sudah_jawab"] = sudah_jawab
+    kuis.setdefault("sudah_jawab", {})[user_id] = {
+        "nama": nama, "username": username, "pilihan": pilihan
+    }
     save_data(FILE_KUIS, kuis)
-
-    tag = f"@{username}" if username else nama
-    await query.answer(f"✅ Jawaban kamu: {pilihan} tercatat!", show_alert=True)
-    logging.info(f"📝 {tag} menjawab: {pilihan}")
+    await query.answer(f"✅ Jawaban: {pilihan} tercatat!", show_alert=True)
 
 # ──────────────── SCHEDULER JOBS ───────────────────
 
@@ -410,24 +391,10 @@ async def kirim_update(bot: Bot, label: str):
     except Exception as e:
         logging.error(f"Gagal kirim harga: {e}")
 
-async def kirim_berita(bot: Bot):
-    try:
-        await bot.send_message(
-            chat_id=GROUP_ID,
-            text=format_berita(),
-            parse_mode="Markdown",
-            disable_web_page_preview=False  # tampilkan preview link
-        )
-        logging.info("✅ Berita terkirim")
-    except Exception as e:
-        logging.error(f"Gagal kirim berita: {e}")
-
 async def kirim_leaderboard_harian(bot: Bot):
-    periode = datetime.now().strftime("%d %b %Y")
-    msg = format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", periode)
+    msg = format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", datetime.now().strftime("%d %b %Y"))
     try:
         await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown")
-        logging.info("✅ Leaderboard harian terkirim")
         reset_data(FILE_HARIAN)
     except Exception as e:
         logging.error(f"Gagal kirim leaderboard harian: {e}")
@@ -436,10 +403,9 @@ async def kirim_leaderboard_mingguan(bot: Bot):
     now    = datetime.now()
     senin  = (now - timedelta(days=7)).strftime("%d %b")
     minggu = (now - timedelta(days=1)).strftime("%d %b %Y")
-    msg = format_leaderboard(FILE_MINGGUAN, "📅 *Rekap Mingguan*", f"{senin} – {minggu}")
+    msg    = format_leaderboard(FILE_MINGGUAN, "📅 *Rekap Mingguan*", f"{senin} – {minggu}")
     try:
         await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown")
-        logging.info("✅ Leaderboard mingguan terkirim")
         reset_data(FILE_MINGGUAN)
     except Exception as e:
         logging.error(f"Gagal kirim leaderboard mingguan: {e}")
@@ -449,22 +415,18 @@ async def kirim_leaderboard_bulanan(bot: Bot):
     msg = format_leaderboard(FILE_BULANAN, "📆 *Rekap Bulanan*", bulan_lalu)
     try:
         await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown")
-        logging.info("✅ Leaderboard bulanan terkirim")
         reset_data(FILE_BULANAN)
     except Exception as e:
         logging.error(f"Gagal kirim leaderboard bulanan: {e}")
 
-# ──────────────── HANDLE PESAN (tracker + keyword) ───────────────────
+# ──────────────── HANDLE PESAN ───────────────────
 
 async def handle_pesan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     if not user or user.is_bot:
         return
-
     user_id  = str(user.id)
-    nama     = user.first_name or ""
-    if user.last_name:
-        nama += f" {user.last_name}"
+    nama     = (user.first_name or "") + (f" {user.last_name}" if user.last_name else "")
     username = user.username or ""
     tambah_pesan(user_id, nama, username)
 
@@ -473,7 +435,6 @@ async def handle_pesan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if teks == "btc":
         await update.message.reply_text("⏳ Mengambil data, sebentar...")
         await update.message.reply_text(format_message("Update Manual"), parse_mode="Markdown")
-
     elif teks == "fg":
         fg = get_fear_greed()
         if fg:
@@ -487,48 +448,50 @@ async def handle_pesan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             msg = "❌ Gagal mengambil data"
         await update.message.reply_text(msg, parse_mode="Markdown")
-
-    elif teks == "news" or teks == "berita":
-        await update.message.reply_text("⏳ Mengambil berita terbaru...")
-        await update.message.reply_text(format_berita(), parse_mode="Markdown", disable_web_page_preview=False)
-
+    elif teks in ["berita", "news"]:
+        await update.message.reply_text("⏳ Mengambil berita terbaru dari semua sumber...")
+        berita_list = fetch_rss_news(max_per_source=3)[:15]
+        if berita_list:
+            for b in berita_list:
+                msg = f"📰 *{b['sumber']}*\n\n*{b['judul']}*\n\n🔗 {b['url']}"
+                await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=False)
+                await asyncio.sleep(0.5)
+        else:
+            await update.message.reply_text("❌ Berita tidak tersedia saat ini.")
     elif teks == "top":
         await update.message.reply_text(
             format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", datetime.now().strftime("%d %b %Y")),
-            parse_mode="Markdown"
-        )
+            parse_mode="Markdown")
     elif teks == "topweek":
         now     = datetime.now()
         senin   = (now - timedelta(days=now.weekday())).strftime("%d %b")
         hari_ini = now.strftime("%d %b %Y")
         await update.message.reply_text(
             format_leaderboard(FILE_MINGGUAN, "📅 *Rekap Minggu Ini*", f"{senin} – {hari_ini}"),
-            parse_mode="Markdown"
-        )
+            parse_mode="Markdown")
     elif teks == "topmonth":
         await update.message.reply_text(
             format_leaderboard(FILE_BULANAN, "📆 *Rekap Bulan Ini*", datetime.now().strftime("%B %Y")),
-            parse_mode="Markdown"
-        )
+            parse_mode="Markdown")
 
 # ──────────────── COMMAND HANDLERS ───────────────────
 
 async def cmd_start(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Halo! Saya *BlockStation Crypto Bot*\n\n"
-        "Ketik langsung atau pakai /perintah:\n\n"
         "📊 *Data & Harga*\n"
         "• btc / /btc — Harga BTC sekarang\n"
-        "• fg / /fg — Fear & Greed Index\n"
-        "• berita / /news — Berita crypto terbaru\n\n"
+        "• fg / /fg — Fear & Greed Index\n\n"
+        "📰 *Berita*\n"
+        "• berita / /news — Berita crypto terbaru\n"
+        "• _(otomatis real-time setiap 5 menit)_\n\n"
         "🏆 *Leaderboard*\n"
-        "• top / /top — Leaderboard hari ini\n"
-        "• topweek / /topweek — Rekap minggu ini\n"
-        "• topmonth / /topmonth — Rekap bulan ini\n\n"
-        "🎯 *Kuis*\n"
-        "• Kuis harga BTC otomatis jam 20:00 WIB\n"
+        "• top / /top — Hari ini\n"
+        "• topweek / /topweek — Minggu ini\n"
+        "• topmonth / /topmonth — Bulan ini\n\n"
+        "🎯 *Kuis* — otomatis jam 20:00 WIB\n"
         "• Benar: +3 poin | Salah: -5 poin\n\n"
-        "• /info — Info lengkap bot",
+        "• /info — Info lengkap jadwal bot",
         parse_mode="Markdown"
     )
 
@@ -551,14 +514,20 @@ async def cmd_fg(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def cmd_news(update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Mengambil berita terbaru...")
-    await update.message.reply_text(format_berita(), parse_mode="Markdown", disable_web_page_preview=False)
+    await update.message.reply_text("⏳ Mengambil berita dari semua sumber...")
+    berita_list = fetch_rss_news(max_per_source=3)[:15]
+    if berita_list:
+        for b in berita_list:
+            msg = f"📰 *{b['sumber']}*\n\n*{b['judul']}*\n\n🔗 {b['url']}"
+            await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=False)
+            await asyncio.sleep(0.5)
+    else:
+        await update.message.reply_text("❌ Berita tidak tersedia saat ini.")
 
 async def cmd_top(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", datetime.now().strftime("%d %b %Y")),
-        parse_mode="Markdown"
-    )
+        parse_mode="Markdown")
 
 async def cmd_topweek(update, context: ContextTypes.DEFAULT_TYPE):
     now     = datetime.now()
@@ -566,30 +535,29 @@ async def cmd_topweek(update, context: ContextTypes.DEFAULT_TYPE):
     hari_ini = now.strftime("%d %b %Y")
     await update.message.reply_text(
         format_leaderboard(FILE_MINGGUAN, "📅 *Rekap Minggu Ini*", f"{senin} – {hari_ini}"),
-        parse_mode="Markdown"
-    )
+        parse_mode="Markdown")
 
 async def cmd_topmonth(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         format_leaderboard(FILE_BULANAN, "📆 *Rekap Bulan Ini*", datetime.now().strftime("%B %Y")),
-        parse_mode="Markdown"
-    )
+        parse_mode="Markdown")
 
 async def cmd_info(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 *BlockStation Crypto Bot*\n\n"
-        "📡 Sumber data: CoinGecko, Alternative.me, CryptoPanic\n\n"
+        "📡 Sumber data:\n"
+        "   • Harga: CoinGecko\n"
+        "   • Sentiment: Alternative.me\n"
+        "   • Berita: CoinDesk, CoinTelegraph,\n"
+        "     Decrypt, Bitcoin Magazine, CryptoSlate\n\n"
         "⏰ Jadwal otomatis:\n"
-        "   • 07:00 WIB — Berita crypto + Update harga\n"
-        "   • 11:00 | 15:00 | 19:00 | 23:00 | 03:00 — Update harga\n"
-        "   • 20:00 WIB — Kuis tebak harga BTC\n"
-        "   • 21:00 WIB — Hasil kuis + update poin\n"
-        "   • 20:00 WIB — Leaderboard harian\n"
-        "   • Senin 07:00 WIB — Rekap mingguan\n"
-        "   • Tgl 1, 07:00 WIB — Rekap bulanan\n\n"
-        "🎯 Sistem poin kuis:\n"
-        "   • Benar: +3 poin\n"
-        "   • Salah: -5 poin\n\n"
+        "   • Berita real-time — setiap 5 menit\n"
+        "   • Harga — 07:00|11:00|15:00|19:00|23:00|03:00\n"
+        "   • Kuis  — 20:00 WIB\n"
+        "   • Hasil kuis — 21:00 WIB\n"
+        "   • Leaderboard harian — 20:05 WIB\n"
+        "   • Rekap mingguan — Senin 07:00 WIB\n"
+        "   • Rekap bulanan  — Tgl 1, 07:00 WIB\n\n"
         "🛠 Made with python-telegram-bot",
         parse_mode="Markdown"
     )
@@ -600,30 +568,25 @@ async def welcome_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for member in update.message.new_chat_members:
         if member.is_bot:
             continue
-        nama     = member.first_name or ""
-        if member.last_name:
-            nama += f" {member.last_name}"
+        nama     = (member.first_name or "") + (f" {member.last_name}" if member.last_name else "")
         username = f"@{member.username}" if member.username else nama
         btc      = get_btc_price()
         harga_info = f"\n\n💰 *BTC saat ini:* `${btc['usd']:,.2f}` ({btc['change24h']:+.2f}%)" if btc else ""
         msg = (
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎉 *Selamat Datang!*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n🎉 *Selamat Datang!*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"Halo {username}! 👋\n"
             f"Selamat bergabung di *BlockStation* 🚀\n\n"
             f"📌 *Yang bisa kamu temukan di sini:*\n"
-            f"   • Update harga BTC setiap 4 jam\n"
-            f"   • 📰 Berita crypto terbaru setiap pagi\n"
-            f"   • 🎯 Kuis tebak harga BTC setiap malam\n"
-            f"   • 🏆 Leaderboard harian, mingguan & bulanan\n"
-            f"   • Diskusi & info terkini seputar crypto"
+            f"   • 📊 Update harga BTC setiap 4 jam\n"
+            f"   • 📰 Berita crypto real-time\n"
+            f"   • 🎯 Kuis tebak harga BTC tiap malam\n"
+            f"   • 🏆 Leaderboard harian, mingguan & bulanan"
             f"{harga_info}\n\n"
             f"💬 Ketik /start untuk lihat semua fitur\n"
             f"━━━━━━━━━━━━━━━━━━━━"
         )
         await update.message.reply_text(msg, parse_mode="Markdown")
-        logging.info(f"✅ Welcome terkirim untuk: {nama}")
 
 # ──────────────── MAIN ───────────────────
 
@@ -644,33 +607,35 @@ async def main():
 
     scheduler = AsyncIOScheduler(timezone="UTC")
 
-    # Update harga 6x sehari
+    # Harga 6x sehari
     for jadwal in JADWAL:
         scheduler.add_job(kirim_update, trigger="cron",
             hour=jadwal["jam"], minute=jadwal["menit"], args=[app.bot, jadwal["label"]])
 
-    # Berita pagi jam 07:00 WIB = 00:00 UTC
-    scheduler.add_job(kirim_berita, trigger="cron", hour=0, minute=0, args=[app.bot])
+    # Berita real-time setiap 5 menit
+    scheduler.add_job(cek_dan_kirim_berita, trigger="interval",
+        minutes=5, args=[app.bot])
 
     # Kuis jam 20:00 WIB = 13:00 UTC
     scheduler.add_job(kirim_kuis, trigger="cron", hour=13, minute=0, args=[app.bot])
 
-    # Tutup kuis & umumkan hasil 1 jam kemudian = 14:00 UTC
+    # Hasil kuis jam 21:00 WIB = 14:00 UTC
     scheduler.add_job(tutup_kuis, trigger="cron", hour=14, minute=0, args=[app.bot])
 
-    # Leaderboard harian jam 20:00 WIB setelah kuis = 13:05 UTC
-    scheduler.add_job(kirim_leaderboard_harian, trigger="cron", hour=13, minute=5, args=[app.bot])
+    # Leaderboard harian jam 20:05 WIB = 13:05 UTC
+    scheduler.add_job(kirim_leaderboard_harian, trigger="cron",
+        hour=13, minute=5, args=[app.bot])
 
-    # Rekap mingguan — Senin 07:00 WIB = 00:00 UTC
+    # Rekap mingguan Senin 07:00 WIB = 00:01 UTC
     scheduler.add_job(kirim_leaderboard_mingguan, trigger="cron",
         day_of_week="mon", hour=0, minute=1, args=[app.bot])
 
-    # Rekap bulanan — tanggal 1 jam 07:00 WIB = 00:00 UTC
+    # Rekap bulanan tgl 1 jam 07:00 WIB = 00:02 UTC
     scheduler.add_job(kirim_leaderboard_bulanan, trigger="cron",
         day=1, hour=0, minute=2, args=[app.bot])
 
     scheduler.start()
-    logging.info("✅ Bot aktif | Semua scheduler berjalan...")
+    logging.info("✅ Bot aktif | Berita real-time + semua scheduler berjalan...")
 
     await app.initialize()
     await app.start()
