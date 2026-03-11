@@ -203,7 +203,7 @@ async def cek_dan_kirim_berita(bot: Bot):
     if not berita_baru:
         return
 
-    berita_baru = berita_baru[:15]
+    berita_baru = berita_baru[:3]
 
     if len(sent) > 500:
         keys = list(sent.keys())
