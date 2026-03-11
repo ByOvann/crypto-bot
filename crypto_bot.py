@@ -1,14 +1,9 @@
 """
 ===========================================
   Telegram Crypto Bot — BlockStation
-  Fitur: Harga BTC, Berita Real-time, Kuis, Leaderboard
-  By: Claude | Stack: python-telegram-bot
+  Fitur: Harga BTC, Berita Real-time + AI Insight, Kuis, Leaderboard
+  By: Claude | Stack: python-telegram-bot + Gemini AI
 ===========================================
-SETUP:
-  pip install python-telegram-bot apscheduler requests feedparser
-
-JALANKAN:
-  python crypto_bot.py
 """
 
 import logging
@@ -26,8 +21,9 @@ import asyncio
 # ─────────────────────────────────────────
 #  KONFIGURASI
 # ─────────────────────────────────────────
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8663484684:AAH0kJ0TgpYAaG6NMzxJ0-OKWwg4T0pnNX4")
-GROUP_ID  = os.environ.get("GROUP_ID", "-1003714160870")
+BOT_TOKEN    = os.environ.get("BOT_TOKEN",    "8663484684:AAH0kJ0TgpYAaG6NMzxJ0-OKWwg4T0pnNX4")
+GROUP_ID     = os.environ.get("GROUP_ID",     "-1003714160870")
+GEMINI_KEY   = os.environ.get("GEMINI_API_KEY","AIzaSyAZ6YlOppU2zfHMco3EMOzddMq3vTQYIjI")
 
 JADWAL = [
     {"jam": 0,  "menit": 0, "label": "🕖 Update 07:00 WIB"},
@@ -42,11 +38,11 @@ POIN_BENAR = 3
 POIN_SALAH = 5
 
 RSS_SOURCES = [
-    {"name": "CoinDesk",        "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"},
-    {"name": "CoinTelegraph",   "url": "https://cointelegraph.com/rss"},
-    {"name": "Decrypt",         "url": "https://decrypt.co/feed"},
+    {"name": "CoinDesk",         "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"},
+    {"name": "CoinTelegraph",    "url": "https://cointelegraph.com/rss"},
+    {"name": "Decrypt",          "url": "https://decrypt.co/feed"},
     {"name": "Bitcoin Magazine", "url": "https://bitcoinmagazine.com/feed"},
-    {"name": "CryptoSlate",     "url": "https://cryptoslate.com/feed/"},
+    {"name": "CryptoSlate",      "url": "https://cryptoslate.com/feed/"},
 ]
 
 FILE_HARIAN      = "data_harian.json"
@@ -55,7 +51,6 @@ FILE_BULANAN     = "data_bulanan.json"
 FILE_KUIS        = "data_kuis.json"
 FILE_BERITA_SENT = "berita_sent.json"
 
-# Helper WIB
 def now_wib():
     return datetime.now() + timedelta(hours=7)
 
@@ -65,6 +60,30 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
+
+# ──────────────── GEMINI AI INSIGHT ───────────────────
+
+def get_gemini_insight(judul: str, sumber: str) -> str:
+    """Generate insight singkat dari judul berita pakai Gemini"""
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+        prompt = (
+            f"Kamu adalah analis crypto. Berdasarkan judul berita ini:\n"
+            f"\"{judul}\"\n\n"
+            f"Tulis insight singkat dalam Bahasa Indonesia, maksimal 2 kalimat:\n"
+            f"1. Jelaskan inti beritanya secara singkat\n"
+            f"2. Apa dampak atau artinya bagi market crypto\n\n"
+            f"Gaya bahasa: santai tapi informatif. Jangan mulai dengan kata 'Berita ini'."
+        )
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        r = requests.post(url, json=payload, timeout=10)
+        r.raise_for_status()
+        result = r.json()
+        text = result["candidates"][0]["content"]["parts"][0]["text"]
+        return text.strip()
+    except Exception as e:
+        logging.error(f"Gemini error: {e}")
+        return None
 
 # ──────────────── STORAGE ───────────────────
 
@@ -211,12 +230,16 @@ async def cek_dan_kirim_berita(bot: Bot):
             del sent[k]
     save_data(FILE_BERITA_SENT, sent)
 
-    # ✅ SUDAH DIPERBAIKI — pakai now_wib()
     now = now_wib().strftime("%H:%M WIB")
     for b in berita_baru:
+        # Generate insight dari Gemini
+        insight = get_gemini_insight(b["judul"], b["sumber"])
+        insight_block = f"\n\n💡 *Insight:*\n_{insight}_" if insight else ""
+
         msg = (
             f"📰 *{b['sumber']}* — {now}\n\n"
-            f"*{b['judul']}*\n\n"
+            f"*{b['judul']}*"
+            f"{insight_block}\n\n"
             f"🔗 {b['url']}"
         )
         try:
@@ -226,7 +249,7 @@ async def cek_dan_kirim_berita(bot: Bot):
                 parse_mode="Markdown",
                 disable_web_page_preview=False
             )
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)  # jeda agar tidak flood + beri waktu Gemini
         except Exception as e:
             logging.error(f"Gagal kirim berita: {e}")
 
@@ -237,7 +260,6 @@ async def cek_dan_kirim_berita(bot: Bot):
 def format_message(label_waktu: str) -> str:
     btc = get_btc_price()
     fg  = get_fear_greed()
-    # ✅ SUDAH BENAR — pakai now_wib()
     now = now_wib().strftime("%d %b %Y | %H:%M WIB")
 
     if btc:
@@ -302,7 +324,6 @@ async def kirim_kuis(bot: Bot):
     })
     keyboard     = [[InlineKeyboardButton(o, callback_data=f"kuis:{o}")] for o in opsi]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    # ✅ SUDAH DIPERBAIKI — pakai now_wib()
     now = now_wib().strftime("%d %b %Y | %H:%M WIB")
     msg = (
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -393,8 +414,7 @@ async def kirim_update(bot: Bot, label: str):
         logging.error(f"Gagal kirim harga: {e}")
 
 async def kirim_leaderboard_harian(bot: Bot):
-    periode = now_wib().strftime("%d %b %Y")
-    msg = format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", periode)
+    msg = format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", now_wib().strftime("%d %b %Y"))
     try:
         await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown")
         reset_data(FILE_HARIAN)
@@ -451,13 +471,20 @@ async def handle_pesan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = "❌ Gagal mengambil data"
         await update.message.reply_text(msg, parse_mode="Markdown")
     elif teks in ["berita", "news"]:
-        await update.message.reply_text("⏳ Mengambil berita terbaru dari semua sumber...")
-        berita_list = fetch_rss_news(max_per_source=3)[:15]
+        await update.message.reply_text("⏳ Mengambil berita + insight AI, sebentar...")
+        berita_list = fetch_rss_news(max_per_source=3)[:3]
         if berita_list:
             for b in berita_list:
-                msg = f"📰 *{b['sumber']}*\n\n*{b['judul']}*\n\n🔗 {b['url']}"
+                insight = get_gemini_insight(b["judul"], b["sumber"])
+                insight_block = f"\n\n💡 *Insight:*\n_{insight}_" if insight else ""
+                msg = (
+                    f"📰 *{b['sumber']}*\n\n"
+                    f"*{b['judul']}*"
+                    f"{insight_block}\n\n"
+                    f"🔗 {b['url']}"
+                )
                 await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=False)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1)
         else:
             await update.message.reply_text("❌ Berita tidak tersedia saat ini.")
     elif teks == "top":
@@ -485,7 +512,7 @@ async def cmd_start(update, context: ContextTypes.DEFAULT_TYPE):
         "• btc / /btc — Harga BTC sekarang\n"
         "• fg / /fg — Fear & Greed Index\n\n"
         "📰 *Berita*\n"
-        "• berita / /news — Berita crypto terbaru\n"
+        "• berita / /news — Berita + AI insight\n"
         "• _(otomatis real-time setiap 5 menit)_\n\n"
         "🏆 *Leaderboard*\n"
         "• top / /top — Hari ini\n"
@@ -516,13 +543,20 @@ async def cmd_fg(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def cmd_news(update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Mengambil berita dari semua sumber...")
-    berita_list = fetch_rss_news(max_per_source=3)[:15]
+    await update.message.reply_text("⏳ Mengambil berita + insight AI, sebentar...")
+    berita_list = fetch_rss_news(max_per_source=3)[:3]
     if berita_list:
         for b in berita_list:
-            msg = f"📰 *{b['sumber']}*\n\n*{b['judul']}*\n\n🔗 {b['url']}"
+            insight = get_gemini_insight(b["judul"], b["sumber"])
+            insight_block = f"\n\n💡 *Insight:*\n_{insight}_" if insight else ""
+            msg = (
+                f"📰 *{b['sumber']}*\n\n"
+                f"*{b['judul']}*"
+                f"{insight_block}\n\n"
+                f"🔗 {b['url']}"
+            )
             await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=False)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
     else:
         await update.message.reply_text("❌ Berita tidak tersedia saat ini.")
 
@@ -551,7 +585,8 @@ async def cmd_info(update, context: ContextTypes.DEFAULT_TYPE):
         "   • Harga: CoinGecko\n"
         "   • Sentiment: Alternative.me\n"
         "   • Berita: CoinDesk, CoinTelegraph,\n"
-        "     Decrypt, Bitcoin Magazine, CryptoSlate\n\n"
+        "     Decrypt, Bitcoin Magazine, CryptoSlate\n"
+        "   • AI Insight: Gemini (Google)\n\n"
         "⏰ Jadwal otomatis:\n"
         "   • Berita real-time — setiap 5 menit\n"
         "   • Harga — 07:00|11:00|15:00|19:00|23:00|03:00\n"
@@ -560,7 +595,7 @@ async def cmd_info(update, context: ContextTypes.DEFAULT_TYPE):
         "   • Leaderboard harian — 20:05 WIB\n"
         "   • Rekap mingguan — Senin 07:00 WIB\n"
         "   • Rekap bulanan  — Tgl 1, 07:00 WIB\n\n"
-        "🛠 Made with python-telegram-bot",
+        "🛠 Made with python-telegram-bot + Gemini AI",
         parse_mode="Markdown"
     )
 
@@ -581,7 +616,7 @@ async def welcome_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Selamat bergabung di *BlockStation* 🚀\n\n"
             f"📌 *Yang bisa kamu temukan di sini:*\n"
             f"   • 📊 Update harga BTC setiap 4 jam\n"
-            f"   • 📰 Berita crypto real-time\n"
+            f"   • 📰 Berita crypto + AI insight real-time\n"
             f"   • 🎯 Kuis tebak harga BTC tiap malam\n"
             f"   • 🏆 Leaderboard harian, mingguan & bulanan"
             f"{harga_info}\n\n"
@@ -613,17 +648,17 @@ async def main():
         scheduler.add_job(kirim_update, trigger="cron",
             hour=jadwal["jam"], minute=jadwal["menit"], args=[app.bot, jadwal["label"]])
 
-    scheduler.add_job(cek_dan_kirim_berita, trigger="interval", minutes=5, args=[app.bot])
-    scheduler.add_job(kirim_kuis,               trigger="cron", hour=13, minute=0,  args=[app.bot])
-    scheduler.add_job(tutup_kuis,               trigger="cron", hour=14, minute=0,  args=[app.bot])
-    scheduler.add_job(kirim_leaderboard_harian, trigger="cron", hour=13, minute=5,  args=[app.bot])
+    scheduler.add_job(cek_dan_kirim_berita,       trigger="interval", minutes=5, args=[app.bot])
+    scheduler.add_job(kirim_kuis,                 trigger="cron", hour=13, minute=0,  args=[app.bot])
+    scheduler.add_job(tutup_kuis,                 trigger="cron", hour=14, minute=0,  args=[app.bot])
+    scheduler.add_job(kirim_leaderboard_harian,   trigger="cron", hour=13, minute=5,  args=[app.bot])
     scheduler.add_job(kirim_leaderboard_mingguan, trigger="cron",
         day_of_week="mon", hour=0, minute=1, args=[app.bot])
-    scheduler.add_job(kirim_leaderboard_bulanan, trigger="cron",
+    scheduler.add_job(kirim_leaderboard_bulanan,  trigger="cron",
         day=1, hour=0, minute=2, args=[app.bot])
 
     scheduler.start()
-    logging.info("✅ Bot aktif | Semua scheduler berjalan...")
+    logging.info("✅ Bot aktif | Berita + Gemini AI Insight berjalan...")
 
     await app.initialize()
     await app.start()
