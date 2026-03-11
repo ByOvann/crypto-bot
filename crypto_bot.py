@@ -3,6 +3,7 @@
   Telegram Crypto Bot — BlockStation
   Fitur: Harga BTC, Berita Real-time + AI Insight, Kuis, Leaderboard
   By: Claude | Stack: python-telegram-bot + Grok AI
+  Update: +Berita Indonesia (CNBC ID, Bisnis, Detik, Katadata, Crypto Lokal)
 ===========================================
 """
 
@@ -37,13 +38,62 @@ JADWAL = [
 POIN_BENAR = 3
 POIN_SALAH = 5
 
-RSS_SOURCES = [
-    {"name": "CoinDesk",         "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"},
-    {"name": "CoinTelegraph",    "url": "https://cointelegraph.com/rss"},
-    {"name": "Decrypt",          "url": "https://decrypt.co/feed"},
-    {"name": "Bitcoin Magazine", "url": "https://bitcoinmagazine.com/feed"},
-    {"name": "CryptoSlate",      "url": "https://cryptoslate.com/feed/"},
+# ─────────────────────────────────────────
+#  RSS SOURCES
+# ─────────────────────────────────────────
+
+RSS_SOURCES_GLOBAL = [
+    {"name": "CoinDesk",         "url": "https://www.coindesk.com/arc/outboundfeeds/rss/",   "region": "global"},
+    {"name": "CoinTelegraph",    "url": "https://cointelegraph.com/rss",                     "region": "global"},
+    {"name": "Decrypt",          "url": "https://decrypt.co/feed",                           "region": "global"},
+    {"name": "Bitcoin Magazine", "url": "https://bitcoinmagazine.com/feed",                  "region": "global"},
+    {"name": "CryptoSlate",      "url": "https://cryptoslate.com/feed/",                     "region": "global"},
 ]
+
+RSS_SOURCES_INDONESIA = [
+    {"name": "CNBC Indonesia",   "url": "https://www.cnbcindonesia.com/rss",                 "region": "id"},
+    {"name": "Bisnis.com Market","url": "https://market.bisnis.com/rss",                     "region": "id"},
+    {"name": "Bisnis.com Fintech","url": "https://teknologi.bisnis.com/rss",                 "region": "id"},
+    {"name": "Detik Finance",    "url": "https://finance.detik.com/rss_index/",              "region": "id"},
+    {"name": "Katadata",         "url": "https://katadata.co.id/rss.xml",                    "region": "id"},
+    {"name": "Pintu Blog",       "url": "https://pintu.co.id/blog/rss.xml",                  "region": "id"},
+    {"name": "Tokocrypto",       "url": "https://www.tokocrypto.com/academy/feed/",          "region": "id"},
+]
+
+RSS_SOURCES = RSS_SOURCES_GLOBAL + RSS_SOURCES_INDONESIA
+
+# ─────────────────────────────────────────
+#  FILTER KEYWORD — Berita Indonesia
+#  Hanya loloskan berita yang relevan
+#  dengan crypto / pasar modal / keuangan
+# ─────────────────────────────────────────
+
+KEYWORDS_ID = [
+    # Crypto
+    "bitcoin", "btc", "ethereum", "eth", "crypto", "kripto",
+    "blockchain", "altcoin", "defi", "nft", "token", "koin digital",
+    "aset digital", "exchange kripto", "binance", "coinbase",
+    "stablecoin", "web3", "mining", "wallet kripto",
+    # Pasar Modal & Saham
+    "ihsg", "saham", "bursa efek", "bei", "idx",
+    "pasar modal", "reksa dana", "obligasi", "emiten",
+    "ipo", "right issue", "dividen", "idx",
+    "blue chip", "market cap", "kapitalisasi",
+    # Forex & Komoditas terkait
+    "rupiah", "idr", "dolar", "kurs", "bi rate",
+    "bank indonesia", "ojk", "suku bunga",
+    "emas", "gold", "minyak", "komoditas",
+    # Umum keuangan
+    "investasi", "portofolio", "inflasi", "ekonomi",
+    "fiskal", "moneter", "neraca", "pertumbuhan ekonomi",
+]
+
+def is_relevant_id(judul: str) -> bool:
+    """Return True jika judul berita mengandung keyword relevan (case-insensitive)."""
+    judul_lower = judul.lower()
+    return any(kw in judul_lower for kw in KEYWORDS_ID)
+
+# ─────────────────────────────────────────
 
 FILE_HARIAN      = "data_harian.json"
 FILE_MINGGUAN    = "data_mingguan.json"
@@ -63,18 +113,30 @@ logging.basicConfig(
 
 # ──────────────── GROK AI INSIGHT ───────────────────
 
-def get_grok_insight(judul: str, sumber: str) -> str:
+def get_grok_insight(judul: str, sumber: str, region: str = "global") -> str:
     """Generate insight singkat dari judul berita pakai Grok (xAI)"""
     try:
         url = "https://api.x.ai/v1/chat/completions"
-        prompt = (
-            f"Kamu adalah analis crypto. Berdasarkan judul berita ini:\n"
-            f"\"{judul}\"\n\n"
-            f"Tulis insight singkat dalam Bahasa Indonesia, maksimal 2 kalimat:\n"
-            f"1. Jelaskan inti beritanya secara singkat\n"
-            f"2. Apa dampak atau artinya bagi market crypto\n\n"
-            f"Gaya bahasa: santai tapi informatif. Jangan mulai dengan kata 'Berita ini'."
-        )
+
+        if region == "id":
+            prompt = (
+                f"Kamu adalah analis pasar keuangan dan crypto Indonesia. "
+                f"Berdasarkan judul berita ini:\n\"{judul}\"\n\n"
+                f"Tulis insight singkat dalam Bahasa Indonesia, maksimal 2 kalimat:\n"
+                f"1. Jelaskan inti beritanya secara singkat\n"
+                f"2. Apa dampak atau artinya bagi investor/trader Indonesia\n\n"
+                f"Gaya bahasa: santai tapi informatif. Jangan mulai dengan kata 'Berita ini'."
+            )
+        else:
+            prompt = (
+                f"Kamu adalah analis crypto. Berdasarkan judul berita ini:\n"
+                f"\"{judul}\"\n\n"
+                f"Tulis insight singkat dalam Bahasa Indonesia, maksimal 2 kalimat:\n"
+                f"1. Jelaskan inti beritanya secara singkat\n"
+                f"2. Apa dampak atau artinya bagi market crypto\n\n"
+                f"Gaya bahasa: santai tapi informatif. Jangan mulai dengan kata 'Berita ini'."
+            )
+
         headers = {
             "Authorization": f"Bearer {GROK_KEY}",
             "Content-Type": "application/json"
@@ -200,20 +262,44 @@ def get_fear_greed():
 # ──────────────── BERITA REAL-TIME ───────────────────
 
 def fetch_rss_news(max_per_source: int = 3) -> list:
+    """
+    Ambil berita dari semua sumber.
+    Berita dari region 'id' difilter otomatis pakai KEYWORDS_ID.
+    Berita global lolos semua (sudah relevan dari sumbernya).
+    """
     semua_berita = []
+    skipped_id   = 0
+
     for src in RSS_SOURCES:
         try:
             feed = feedparser.parse(src["url"])
-            for entry in feed.entries[:max_per_source]:
+            count = 0
+            for entry in feed.entries:
+                if count >= max_per_source:
+                    break
+
+                judul  = entry.get("title", "No title")
+                region = src.get("region", "global")
+
+                # Filter berita Indonesia — hanya yang relevan
+                if region == "id" and not is_relevant_id(judul):
+                    skipped_id += 1
+                    continue
+
                 semua_berita.append({
                     "id":     entry.get("id") or entry.get("link", ""),
-                    "judul":  entry.get("title", "No title"),
+                    "judul":  judul,
                     "url":    entry.get("link", ""),
                     "sumber": src["name"],
+                    "region": region,
                     "waktu":  entry.get("published", "")
                 })
+                count += 1
+
         except Exception as e:
             logging.error(f"Error RSS {src['name']}: {e}")
+
+    logging.info(f"📰 Berita diambil: {len(semua_berita)} | Difilter (ID tidak relevan): {skipped_id}")
     return semua_berita
 
 async def cek_dan_kirim_berita(bot: Bot):
@@ -239,12 +325,17 @@ async def cek_dan_kirim_berita(bot: Bot):
 
     now = now_wib().strftime("%H:%M WIB")
     for b in berita_baru:
-        # Generate insight dari Grok
-        insight = get_grok_insight(b["judul"], b["sumber"])
+        region = b.get("region", "global")
+
+        # Flag region untuk label visual
+        flag   = "🇮🇩" if region == "id" else "🌐"
+
+        # Generate insight — beda prompt untuk ID vs global
+        insight = get_grok_insight(b["judul"], b["sumber"], region)
         insight_block = f"\n\n💡 *Insight:*\n_{insight}_" if insight else ""
 
         msg = (
-            f"📰 *{b['sumber']}* — {now}\n\n"
+            f"📰 {flag} *{b['sumber']}* — {now}\n\n"
             f"*{b['judul']}*"
             f"{insight_block}\n\n"
             f"🔗 {b['url']}"
@@ -256,7 +347,7 @@ async def cek_dan_kirim_berita(bot: Bot):
                 parse_mode="Markdown",
                 disable_web_page_preview=False
             )
-            await asyncio.sleep(2)  # jeda agar tidak flood + beri waktu Grok
+            await asyncio.sleep(2)
         except Exception as e:
             logging.error(f"Gagal kirim berita: {e}")
 
@@ -479,13 +570,15 @@ async def handle_pesan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode="Markdown")
     elif teks in ["berita", "news"]:
         await update.message.reply_text("⏳ Mengambil berita + insight AI, sebentar...")
-        berita_list = fetch_rss_news(max_per_source=3)[:3]
+        berita_list = fetch_rss_news(max_per_source=2)[:4]
         if berita_list:
             for b in berita_list:
-                insight = get_grok_insight(b["judul"], b["sumber"])
+                region  = b.get("region", "global")
+                flag    = "🇮🇩" if region == "id" else "🌐"
+                insight = get_grok_insight(b["judul"], b["sumber"], region)
                 insight_block = f"\n\n💡 *Insight:*\n_{insight}_" if insight else ""
                 msg = (
-                    f"📰 *{b['sumber']}*\n\n"
+                    f"📰 {flag} *{b['sumber']}*\n\n"
                     f"*{b['judul']}*"
                     f"{insight_block}\n\n"
                     f"🔗 {b['url']}"
@@ -494,6 +587,25 @@ async def handle_pesan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await asyncio.sleep(1)
         else:
             await update.message.reply_text("❌ Berita tidak tersedia saat ini.")
+    elif teks in ["berita id", "news id", "beritaid"]:
+        # Khusus berita Indonesia
+        await update.message.reply_text("⏳ Mengambil berita Indonesia + insight AI...")
+        semua = fetch_rss_news(max_per_source=3)
+        berita_id = [b for b in semua if b.get("region") == "id"][:4]
+        if berita_id:
+            for b in berita_id:
+                insight = get_grok_insight(b["judul"], b["sumber"], "id")
+                insight_block = f"\n\n💡 *Insight:*\n_{insight}_" if insight else ""
+                msg = (
+                    f"📰 🇮🇩 *{b['sumber']}*\n\n"
+                    f"*{b['judul']}*"
+                    f"{insight_block}\n\n"
+                    f"🔗 {b['url']}"
+                )
+                await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=False)
+                await asyncio.sleep(1)
+        else:
+            await update.message.reply_text("❌ Tidak ada berita Indonesia yang relevan saat ini.")
     elif teks == "top":
         await update.message.reply_text(
             format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", now_wib().strftime("%d %b %Y")),
@@ -519,7 +631,8 @@ async def cmd_start(update, context: ContextTypes.DEFAULT_TYPE):
         "• btc / /btc — Harga BTC sekarang\n"
         "• fg / /fg — Fear & Greed Index\n\n"
         "📰 *Berita*\n"
-        "• berita / /news — Berita + AI insight\n"
+        "• berita / /news — Semua berita + AI insight\n"
+        "• beritaid — 🇮🇩 Berita Indonesia saja\n"
         "• _(otomatis real-time setiap 5 menit)_\n\n"
         "🏆 *Leaderboard*\n"
         "• top / /top — Hari ini\n"
@@ -551,13 +664,15 @@ async def cmd_fg(update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_news(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Mengambil berita + insight AI, sebentar...")
-    berita_list = fetch_rss_news(max_per_source=3)[:3]
+    berita_list = fetch_rss_news(max_per_source=2)[:4]
     if berita_list:
         for b in berita_list:
-            insight = get_grok_insight(b["judul"], b["sumber"])
+            region  = b.get("region", "global")
+            flag    = "🇮🇩" if region == "id" else "🌐"
+            insight = get_grok_insight(b["judul"], b["sumber"], region)
             insight_block = f"\n\n💡 *Insight:*\n_{insight}_" if insight else ""
             msg = (
-                f"📰 *{b['sumber']}*\n\n"
+                f"📰 {flag} *{b['sumber']}*\n\n"
                 f"*{b['judul']}*"
                 f"{insight_block}\n\n"
                 f"🔗 {b['url']}"
@@ -591,9 +706,15 @@ async def cmd_info(update, context: ContextTypes.DEFAULT_TYPE):
         "📡 Sumber data:\n"
         "   • Harga: CoinGecko\n"
         "   • Sentiment: Alternative.me\n"
-        "   • Berita: CoinDesk, CoinTelegraph,\n"
+        "   • Berita Global: CoinDesk, CoinTelegraph,\n"
         "     Decrypt, Bitcoin Magazine, CryptoSlate\n"
+        "   • Berita 🇮🇩: CNBC Indonesia, Bisnis.com,\n"
+        "     Detik Finance, Katadata,\n"
+        "     Pintu Blog, Tokocrypto\n"
         "   • AI Insight: Grok (xAI)\n\n"
+        "🔍 Filter berita Indonesia:\n"
+        "   Hanya berita relevan: crypto, saham,\n"
+        "   IHSG, pasar modal, kurs, investasi\n\n"
         "⏰ Jadwal otomatis:\n"
         "   • Berita real-time — setiap 5 menit\n"
         "   • Harga — 07:00|11:00|15:00|19:00|23:00|03:00\n"
@@ -623,7 +744,7 @@ async def welcome_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Selamat bergabung di *BlockStation* 🚀\n\n"
             f"📌 *Yang bisa kamu temukan di sini:*\n"
             f"   • 📊 Update harga BTC setiap 4 jam\n"
-            f"   • 📰 Berita crypto + AI insight real-time\n"
+            f"   • 📰 Berita crypto + pasar modal 🇮🇩 real-time\n"
             f"   • 🎯 Kuis tebak harga BTC tiap malam\n"
             f"   • 🏆 Leaderboard harian, mingguan & bulanan"
             f"{harga_info}\n\n"
@@ -665,7 +786,7 @@ async def main():
         day=1, hour=0, minute=2, args=[app.bot])
 
     scheduler.start()
-    logging.info("✅ Bot aktif | Berita + Grok AI Insight berjalan...")
+    logging.info("✅ Bot aktif | Berita Global + 🇮🇩 Indonesia + Grok AI Insight berjalan...")
 
     await app.initialize()
     await app.start()
