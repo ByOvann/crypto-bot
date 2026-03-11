@@ -2,7 +2,7 @@
 ===========================================
   Telegram Crypto Bot — BlockStation
   Fitur: Harga BTC, Berita Real-time + AI Insight, Kuis, Leaderboard
-  By: Claude | Stack: python-telegram-bot + Gemini AI
+  By: Claude | Stack: python-telegram-bot + Grok AI
 ===========================================
 """
 
@@ -23,7 +23,7 @@ import asyncio
 # ─────────────────────────────────────────
 BOT_TOKEN    = os.environ.get("BOT_TOKEN",    "8663484684:AAH0kJ0TgpYAaG6NMzxJ0-OKWwg4T0pnNX4")
 GROUP_ID     = os.environ.get("GROUP_ID",     "-1003714160870")
-GEMINI_KEY   = os.environ.get("GEMINI_API_KEY","AIzaSyAZ6YlOppU2zfHMco3EMOzddMq3vTQYIjI")
+GROK_KEY     = os.environ.get("GROK_API_KEY", "")
 
 JADWAL = [
     {"jam": 0,  "menit": 0, "label": "🕖 Update 07:00 WIB"},
@@ -61,12 +61,12 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# ──────────────── GEMINI AI INSIGHT ───────────────────
+# ──────────────── GROK AI INSIGHT ───────────────────
 
-def get_gemini_insight(judul: str, sumber: str) -> str:
-    """Generate insight singkat dari judul berita pakai Gemini"""
+def get_grok_insight(judul: str, sumber: str) -> str:
+    """Generate insight singkat dari judul berita pakai Grok (xAI)"""
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+        url = "https://api.x.ai/v1/chat/completions"
         prompt = (
             f"Kamu adalah analis crypto. Berdasarkan judul berita ini:\n"
             f"\"{judul}\"\n\n"
@@ -75,14 +75,21 @@ def get_gemini_insight(judul: str, sumber: str) -> str:
             f"2. Apa dampak atau artinya bagi market crypto\n\n"
             f"Gaya bahasa: santai tapi informatif. Jangan mulai dengan kata 'Berita ini'."
         )
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
-        r = requests.post(url, json=payload, timeout=10)
+        headers = {
+            "Authorization": f"Bearer {GROK_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "grok-3-fast",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 150
+        }
+        r = requests.post(url, headers=headers, json=payload, timeout=15)
         r.raise_for_status()
-        result = r.json()
-        text = result["candidates"][0]["content"]["parts"][0]["text"]
+        text = r.json()["choices"][0]["message"]["content"]
         return text.strip()
     except Exception as e:
-        logging.error(f"Gemini error: {e}")
+        logging.error(f"Grok error: {e}")
         return None
 
 # ──────────────── STORAGE ───────────────────
@@ -232,8 +239,8 @@ async def cek_dan_kirim_berita(bot: Bot):
 
     now = now_wib().strftime("%H:%M WIB")
     for b in berita_baru:
-        # Generate insight dari Gemini
-        insight = get_gemini_insight(b["judul"], b["sumber"])
+        # Generate insight dari Grok
+        insight = get_grok_insight(b["judul"], b["sumber"])
         insight_block = f"\n\n💡 *Insight:*\n_{insight}_" if insight else ""
 
         msg = (
@@ -249,7 +256,7 @@ async def cek_dan_kirim_berita(bot: Bot):
                 parse_mode="Markdown",
                 disable_web_page_preview=False
             )
-            await asyncio.sleep(2)  # jeda agar tidak flood + beri waktu Gemini
+            await asyncio.sleep(2)  # jeda agar tidak flood + beri waktu Grok
         except Exception as e:
             logging.error(f"Gagal kirim berita: {e}")
 
@@ -475,7 +482,7 @@ async def handle_pesan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         berita_list = fetch_rss_news(max_per_source=3)[:3]
         if berita_list:
             for b in berita_list:
-                insight = get_gemini_insight(b["judul"], b["sumber"])
+                insight = get_grok_insight(b["judul"], b["sumber"])
                 insight_block = f"\n\n💡 *Insight:*\n_{insight}_" if insight else ""
                 msg = (
                     f"📰 *{b['sumber']}*\n\n"
@@ -547,7 +554,7 @@ async def cmd_news(update, context: ContextTypes.DEFAULT_TYPE):
     berita_list = fetch_rss_news(max_per_source=3)[:3]
     if berita_list:
         for b in berita_list:
-            insight = get_gemini_insight(b["judul"], b["sumber"])
+            insight = get_grok_insight(b["judul"], b["sumber"])
             insight_block = f"\n\n💡 *Insight:*\n_{insight}_" if insight else ""
             msg = (
                 f"📰 *{b['sumber']}*\n\n"
@@ -586,7 +593,7 @@ async def cmd_info(update, context: ContextTypes.DEFAULT_TYPE):
         "   • Sentiment: Alternative.me\n"
         "   • Berita: CoinDesk, CoinTelegraph,\n"
         "     Decrypt, Bitcoin Magazine, CryptoSlate\n"
-        "   • AI Insight: Gemini (Google)\n\n"
+        "   • AI Insight: Grok (xAI)\n\n"
         "⏰ Jadwal otomatis:\n"
         "   • Berita real-time — setiap 5 menit\n"
         "   • Harga — 07:00|11:00|15:00|19:00|23:00|03:00\n"
@@ -595,7 +602,7 @@ async def cmd_info(update, context: ContextTypes.DEFAULT_TYPE):
         "   • Leaderboard harian — 20:05 WIB\n"
         "   • Rekap mingguan — Senin 07:00 WIB\n"
         "   • Rekap bulanan  — Tgl 1, 07:00 WIB\n\n"
-        "🛠 Made with python-telegram-bot + Gemini AI",
+        "🛠 Made with python-telegram-bot + Grok AI",
         parse_mode="Markdown"
     )
 
@@ -658,7 +665,7 @@ async def main():
         day=1, hour=0, minute=2, args=[app.bot])
 
     scheduler.start()
-    logging.info("✅ Bot aktif | Berita + Gemini AI Insight berjalan...")
+    logging.info("✅ Bot aktif | Berita + Grok AI Insight berjalan...")
 
     await app.initialize()
     await app.start()
