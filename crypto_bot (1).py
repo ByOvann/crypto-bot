@@ -22,8 +22,8 @@ import asyncio
 # ─────────────────────────────────────────
 #  KONFIGURASI
 # ─────────────────────────────────────────
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "ISI_TOKEN_BOT_KAMU")
-GROUP_ID  = os.environ.get("GROUP_ID",  "ISI_GROUP_ID_KAMU")
+BOT_TOKEN     = os.environ.get("8663484684:AAH0kJ0TgpYAaG6NMzxJ0-OKWwg4T0pnNX4")
+GROUP_ID      = os.environ.get("-1003714160870")
 
 # Jadwal kirim otomatis (UTC = WIB - 7)
 JADWAL = [
