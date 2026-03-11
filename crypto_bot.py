@@ -41,20 +41,24 @@ JADWAL = [
 POIN_BENAR = 3
 POIN_SALAH = 5
 
-# Sumber berita RSS crypto (semua gratis)
 RSS_SOURCES = [
-    {"name": "CoinDesk",       "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"},
-    {"name": "CoinTelegraph",  "url": "https://cointelegraph.com/rss"},
-    {"name": "Decrypt",        "url": "https://decrypt.co/feed"},
-    {"name": "Bitcoin Magazine","url": "https://bitcoinmagazine.com/feed"},
-    {"name": "CryptoSlate",    "url": "https://cryptoslate.com/feed/"},
+    {"name": "CoinDesk",        "url": "https://www.coindesk.com/arc/outboundfeeds/rss/"},
+    {"name": "CoinTelegraph",   "url": "https://cointelegraph.com/rss"},
+    {"name": "Decrypt",         "url": "https://decrypt.co/feed"},
+    {"name": "Bitcoin Magazine", "url": "https://bitcoinmagazine.com/feed"},
+    {"name": "CryptoSlate",     "url": "https://cryptoslate.com/feed/"},
 ]
 
 FILE_HARIAN      = "data_harian.json"
 FILE_MINGGUAN    = "data_mingguan.json"
 FILE_BULANAN     = "data_bulanan.json"
 FILE_KUIS        = "data_kuis.json"
-FILE_BERITA_SENT = "berita_sent.json"   # track berita yang sudah dikirim
+FILE_BERITA_SENT = "berita_sent.json"
+
+# Helper WIB
+def now_wib():
+    return datetime.now() + timedelta(hours=7)
+
 # ─────────────────────────────────────────
 
 logging.basicConfig(
@@ -170,7 +174,6 @@ def get_fear_greed():
 # ──────────────── BERITA REAL-TIME ───────────────────
 
 def fetch_rss_news(max_per_source: int = 3) -> list:
-    """Ambil berita dari semua sumber RSS"""
     semua_berita = []
     for src in RSS_SOURCES:
         try:
@@ -188,32 +191,28 @@ def fetch_rss_news(max_per_source: int = 3) -> list:
     return semua_berita
 
 async def cek_dan_kirim_berita(bot: Bot):
-    """Cek berita baru setiap 5 menit, kirim kalau ada yang baru"""
-    sent = load_data(FILE_BERITA_SENT)
+    sent        = load_data(FILE_BERITA_SENT)
     berita_list = fetch_rss_news(max_per_source=5)
-
     berita_baru = []
+
     for b in berita_list:
         if b["id"] not in sent:
             berita_baru.append(b)
-            sent[b["id"]] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            sent[b["id"]] = now_wib().strftime("%Y-%m-%d %H:%M")
 
     if not berita_baru:
         return
 
-    # Batasi max 15 berita per batch agar tidak spam
     berita_baru = berita_baru[:15]
 
-    # Simpan yang sudah dikirim
-    # Bersihkan data lama (simpan max 500 ID terakhir)
     if len(sent) > 500:
         keys = list(sent.keys())
         for k in keys[:-500]:
             del sent[k]
     save_data(FILE_BERITA_SENT, sent)
 
-    # Kirim per berita (satu pesan per berita agar ada link preview)
-    now = datetime.now().strftime("%H:%M WIB")
+    # ✅ SUDAH DIPERBAIKI — pakai now_wib()
+    now = now_wib().strftime("%H:%M WIB")
     for b in berita_baru:
         msg = (
             f"📰 *{b['sumber']}* — {now}\n\n"
@@ -227,7 +226,7 @@ async def cek_dan_kirim_berita(bot: Bot):
                 parse_mode="Markdown",
                 disable_web_page_preview=False
             )
-            await asyncio.sleep(1)  # jeda 1 detik antar pesan agar tidak flood
+            await asyncio.sleep(1)
         except Exception as e:
             logging.error(f"Gagal kirim berita: {e}")
 
@@ -238,7 +237,8 @@ async def cek_dan_kirim_berita(bot: Bot):
 def format_message(label_waktu: str) -> str:
     btc = get_btc_price()
     fg  = get_fear_greed()
-    now = datetime.now().strftime("%d %b %Y | %H:%M WIB")
+    # ✅ SUDAH BENAR — pakai now_wib()
+    now = now_wib().strftime("%d %b %Y | %H:%M WIB")
 
     if btc:
         change = btc["change24h"]
@@ -298,11 +298,12 @@ async def kirim_kuis(bot: Bot):
         "jawaban_benar":   jawaban_benar,
         "harga_saat_kuis": btc["usd"],
         "sudah_jawab":     {},
-        "waktu":           datetime.now().strftime("%d %b %Y %H:%M")
+        "waktu":           now_wib().strftime("%d %b %Y %H:%M")
     })
     keyboard     = [[InlineKeyboardButton(o, callback_data=f"kuis:{o}")] for o in opsi]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    now = datetime.now().strftime("%d %b %Y | %H:%M WIB")
+    # ✅ SUDAH DIPERBAIKI — pakai now_wib()
+    now = now_wib().strftime("%d %b %Y | %H:%M WIB")
     msg = (
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🎯 *Kuis Harian — Tebak Harga BTC!*\n🕐 {now}\n"
@@ -362,10 +363,10 @@ async def callback_kuis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if not query.data.startswith("kuis:"):
         return
-    pilihan = query.data.replace("kuis:", "")
-    user    = query.from_user
-    user_id = str(user.id)
-    nama    = (user.first_name or "") + (f" {user.last_name}" if user.last_name else "")
+    pilihan  = query.data.replace("kuis:", "")
+    user     = query.from_user
+    user_id  = str(user.id)
+    nama     = (user.first_name or "") + (f" {user.last_name}" if user.last_name else "")
     username = user.username or ""
 
     kuis = load_data(FILE_KUIS)
@@ -392,7 +393,8 @@ async def kirim_update(bot: Bot, label: str):
         logging.error(f"Gagal kirim harga: {e}")
 
 async def kirim_leaderboard_harian(bot: Bot):
-    msg = format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", datetime.now().strftime("%d %b %Y"))
+    periode = now_wib().strftime("%d %b %Y")
+    msg = format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", periode)
     try:
         await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown")
         reset_data(FILE_HARIAN)
@@ -400,7 +402,7 @@ async def kirim_leaderboard_harian(bot: Bot):
         logging.error(f"Gagal kirim leaderboard harian: {e}")
 
 async def kirim_leaderboard_mingguan(bot: Bot):
-    now    = datetime.now()
+    now    = now_wib()
     senin  = (now - timedelta(days=7)).strftime("%d %b")
     minggu = (now - timedelta(days=1)).strftime("%d %b %Y")
     msg    = format_leaderboard(FILE_MINGGUAN, "📅 *Rekap Mingguan*", f"{senin} – {minggu}")
@@ -411,7 +413,7 @@ async def kirim_leaderboard_mingguan(bot: Bot):
         logging.error(f"Gagal kirim leaderboard mingguan: {e}")
 
 async def kirim_leaderboard_bulanan(bot: Bot):
-    bulan_lalu = (datetime.now() - timedelta(days=1)).strftime("%B %Y")
+    bulan_lalu = (now_wib() - timedelta(days=1)).strftime("%B %Y")
     msg = format_leaderboard(FILE_BULANAN, "📆 *Rekap Bulanan*", bulan_lalu)
     try:
         await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown")
@@ -460,10 +462,10 @@ async def handle_pesan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Berita tidak tersedia saat ini.")
     elif teks == "top":
         await update.message.reply_text(
-            format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", datetime.now().strftime("%d %b %Y")),
+            format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", now_wib().strftime("%d %b %Y")),
             parse_mode="Markdown")
     elif teks == "topweek":
-        now     = datetime.now()
+        now     = now_wib()
         senin   = (now - timedelta(days=now.weekday())).strftime("%d %b")
         hari_ini = now.strftime("%d %b %Y")
         await update.message.reply_text(
@@ -471,7 +473,7 @@ async def handle_pesan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown")
     elif teks == "topmonth":
         await update.message.reply_text(
-            format_leaderboard(FILE_BULANAN, "📆 *Rekap Bulan Ini*", datetime.now().strftime("%B %Y")),
+            format_leaderboard(FILE_BULANAN, "📆 *Rekap Bulan Ini*", now_wib().strftime("%B %Y")),
             parse_mode="Markdown")
 
 # ──────────────── COMMAND HANDLERS ───────────────────
@@ -526,11 +528,11 @@ async def cmd_news(update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_top(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", datetime.now().strftime("%d %b %Y")),
+        format_leaderboard(FILE_HARIAN, "🏆 *Leaderboard Harian*", now_wib().strftime("%d %b %Y")),
         parse_mode="Markdown")
 
 async def cmd_topweek(update, context: ContextTypes.DEFAULT_TYPE):
-    now     = datetime.now()
+    now     = now_wib()
     senin   = (now - timedelta(days=now.weekday())).strftime("%d %b")
     hari_ini = now.strftime("%d %b %Y")
     await update.message.reply_text(
@@ -539,7 +541,7 @@ async def cmd_topweek(update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_topmonth(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        format_leaderboard(FILE_BULANAN, "📆 *Rekap Bulan Ini*", datetime.now().strftime("%B %Y")),
+        format_leaderboard(FILE_BULANAN, "📆 *Rekap Bulan Ini*", now_wib().strftime("%B %Y")),
         parse_mode="Markdown")
 
 async def cmd_info(update, context: ContextTypes.DEFAULT_TYPE):
@@ -607,35 +609,21 @@ async def main():
 
     scheduler = AsyncIOScheduler(timezone="UTC")
 
-    # Harga 6x sehari
     for jadwal in JADWAL:
         scheduler.add_job(kirim_update, trigger="cron",
             hour=jadwal["jam"], minute=jadwal["menit"], args=[app.bot, jadwal["label"]])
 
-    # Berita real-time setiap 5 menit
-    scheduler.add_job(cek_dan_kirim_berita, trigger="interval",
-        minutes=5, args=[app.bot])
-
-    # Kuis jam 20:00 WIB = 13:00 UTC
-    scheduler.add_job(kirim_kuis, trigger="cron", hour=13, minute=0, args=[app.bot])
-
-    # Hasil kuis jam 21:00 WIB = 14:00 UTC
-    scheduler.add_job(tutup_kuis, trigger="cron", hour=14, minute=0, args=[app.bot])
-
-    # Leaderboard harian jam 20:05 WIB = 13:05 UTC
-    scheduler.add_job(kirim_leaderboard_harian, trigger="cron",
-        hour=13, minute=5, args=[app.bot])
-
-    # Rekap mingguan Senin 07:00 WIB = 00:01 UTC
+    scheduler.add_job(cek_dan_kirim_berita, trigger="interval", minutes=5, args=[app.bot])
+    scheduler.add_job(kirim_kuis,               trigger="cron", hour=13, minute=0,  args=[app.bot])
+    scheduler.add_job(tutup_kuis,               trigger="cron", hour=14, minute=0,  args=[app.bot])
+    scheduler.add_job(kirim_leaderboard_harian, trigger="cron", hour=13, minute=5,  args=[app.bot])
     scheduler.add_job(kirim_leaderboard_mingguan, trigger="cron",
         day_of_week="mon", hour=0, minute=1, args=[app.bot])
-
-    # Rekap bulanan tgl 1 jam 07:00 WIB = 00:02 UTC
     scheduler.add_job(kirim_leaderboard_bulanan, trigger="cron",
         day=1, hour=0, minute=2, args=[app.bot])
 
     scheduler.start()
-    logging.info("✅ Bot aktif | Berita real-time + semua scheduler berjalan...")
+    logging.info("✅ Bot aktif | Semua scheduler berjalan...")
 
     await app.initialize()
     await app.start()
